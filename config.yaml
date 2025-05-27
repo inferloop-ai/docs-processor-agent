@@ -1,1 +1,428 @@
 # Application configuration
+# Document Processor Agent - Main Configuration File
+
+# Application Settings
+app:
+  name: "Document Processor Agent"
+  version: "1.0.0"
+  description: "AI-powered document processing system with RAG and human-in-the-loop validation"
+  environment: "${ENVIRONMENT:development}"
+
+# Server Configuration
+server:
+  host: "${HOST:0.0.0.0}"
+  port: "${PORT:8000}"
+  reload: "${RELOAD:false}"
+  workers: "${WORKERS:1}"
+  timeout: 300
+  keepalive: 2
+
+# Database Configuration
+database:
+  url: "${DATABASE_URL:sqlite:///./documents.db}"
+  pool_size: "${DB_POOL_SIZE:10}"
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+  echo: "${DB_ECHO:false}"
+
+# LLM Configuration
+llm:
+  primary_provider: "${LLM_PROVIDER:openai}"
+  fallback_providers: ["anthropic", "google"]
+  max_retries: 3
+  timeout: 60
+  
+  models:
+    openai:
+      model: "${OPENAI_MODEL:gpt-4-turbo-preview}"
+      api_key: "${OPENAI_API_KEY}"
+      temperature: "${OPENAI_TEMPERATURE:0.1}"
+      max_tokens: 4000
+      top_p: 1.0
+      frequency_penalty: 0.0
+      presence_penalty: 0.0
+    
+    anthropic:
+      model: "${ANTHROPIC_MODEL:claude-3-sonnet-20240229}"
+      api_key: "${ANTHROPIC_API_KEY}"
+      temperature: "${ANTHROPIC_TEMPERATURE:0.1}"
+      max_tokens: 4000
+    
+    google:
+      model: "${GOOGLE_MODEL:gemini-pro}"
+      api_key: "${GOOGLE_API_KEY}"
+      temperature: "${GOOGLE_TEMPERATURE:0.1}"
+      max_tokens: 4000
+
+# Embedding Configuration
+embeddings:
+  embedding_provider: "${EMBEDDING_PROVIDER:openai}"
+  embedding_model: "${EMBEDDING_MODEL:text-embedding-3-small}"
+  embedding_dimensions: "${EMBEDDING_DIMENSIONS:1536}"
+  chunk_size: "${CHUNK_SIZE:1000}"
+  chunk_overlap: "${CHUNK_OVERLAP:200}"
+  chunk_strategy: "recursive"
+  normalize_embeddings: true
+  batch_size: 50
+
+# Vector Store Configuration
+vector_store:
+  provider: "${VECTOR_STORE_PROVIDER:chroma}"
+  persist_directory: "${CHROMA_PERSIST_DIR:./chroma_db}"
+  collection_name: "${CHROMA_COLLECTION:documents}"
+  distance_metric: "cosine"
+  index_type: "hnsw"
+
+# Agent Configuration
+agents:
+  # Document Loader Agent
+  document_loader:
+    supported_formats: 
+      - ".pdf"
+      - ".docx" 
+      - ".doc"
+      - ".txt"
+      - ".md"
+      - ".html"
+      - ".htm"
+      - ".csv"
+      - ".xlsx"
+      - ".xls"
+      - ".pptx"
+      - ".ppt"
+    max_file_size_mb: "${MAX_FILE_SIZE_MB:100}"
+    temp_dir: "${TEMP_DIR:./temp_uploads}"
+    extract_metadata: true
+    use_ocr: "${USE_OCR:false}"
+    clean_text: true
+    timeout_seconds: 300
+    max_retries: 3
+  
+  # Document Parser Agent
+  parser:
+    extract_metadata: true
+    detect_language: true
+    extract_entities: true
+    extract_keywords: true
+    max_processing_time: 300
+    chunk_strategies: ["recursive", "sentence", "spacy"]
+    min_chunk_size: 100
+    max_chunk_size: 2000
+  
+  # Embedding Agent
+  embedder:
+    batch_size: "${EMBEDDING_BATCH_SIZE:50}"
+    max_retries: 3
+    normalize_embeddings: true
+    cache_enabled: true
+    timeout_seconds: 120
+  
+  # QA Agent
+  qa_agent:
+    max_context_length: "${MAX_CONTEXT_LENGTH:8000}"
+    max_sources: "${MAX_SOURCES:5}"
+    min_confidence_threshold: 0.1
+    include_reasoning: false
+    response_formats: ["brief", "detailed", "structured", "academic"]
+    temperature: 0.1
+  
+  # Validator Agent
+  validator:
+    confidence_threshold: "${VALIDATION_THRESHOLD:0.7}"
+    human_review_threshold: "${HUMAN_REVIEW_THRESHOLD:0.5}"
+    max_retries: 3
+    validation_strategies: ["completeness", "accuracy", "relevance", "consistency"]
+    timeout_seconds: 180
+  
+  # RAG Enricher Agent
+  rag_enricher:
+    web_search_enabled: "${WEB_SEARCH_ENABLED:false}"
+    max_web_results: 5
+    search_timeout: 10
+    trusted_domains:
+      - "wikipedia.org"
+      - "britannica.com"
+      - "nist.gov"
+      - "ieee.org"
+      - "nature.com"
+      - "science.org"
+    min_relevance_score: 0.6
+    max_content_length: 2000
+  
+  # Metadata Writer Agent
+  metadata_writer:
+    validate_metadata: true
+    enrich_metadata: true
+    store_processing_history: true
+    validation_rules:
+      required_fields: ["filename", "file_size", "file_type"]
+      field_types:
+        word_count: "integer"
+        character_count: "integer"
+        page_count: "integer"
+      field_ranges:
+        word_count: [0, 1000000]
+        character_count: [0, 10000000]
+        page_count: [1, 10000]
+
+# Web Search Configuration
+web_search:
+  provider: "${SEARCH_PROVIDER:tavily}"
+  api_key: "${SEARCH_API_KEY}"
+  timeout: 10
+  max_results: 10
+  
+  providers:
+    tavily:
+      base_url: "https://api.tavily.com/search"
+      search_depth: "basic"
+    serper:
+      base_url: "https://google.serper.dev/search"
+    duckduckgo:
+      base_url: "https://api.duckduckgo.com"
+
+# Workflow Configuration
+workflows:
+  document_processing:
+    max_iterations: 10
+    interrupts: []
+    checkpointing: true
+    retry_on_failure: true
+    max_retries: 3
+    timeout_minutes: 30
+    
+  reflexion:
+    enable_human_review: true
+    review_timeout_hours: 24
+    auto_approve_threshold: 0.9
+    escalation_threshold: 0.3
+
+# Monitoring and Logging Configuration
+monitoring:
+  enable_metrics: true
+  metrics_port: 9090
+  log_level: "${LOG_LEVEL:INFO}"
+  structured_logging: true
+  
+  # Prometheus metrics
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  
+  # Health checks
+  health_check:
+    enabled: true
+    interval_seconds: 30
+    timeout_seconds: 10
+  
+  # Performance monitoring
+  performance:
+    track_response_times: true
+    track_memory_usage: true
+    track_cpu_usage: true
+    alert_thresholds:
+      response_time_ms: 5000
+      memory_usage_mb: 1024
+      cpu_usage_percent: 80
+
+# Security Configuration
+security:
+  secret_key: "${SECRET_KEY:your-secret-key-change-in-production}"
+  enable_auth: "${ENABLE_AUTH:false}"
+  
+  # CORS settings
+  cors:
+    allow_origins: ["*"]
+    allow_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allow_headers: ["*"]
+    allow_credentials: true
+  
+  # Rate limiting
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 60
+    burst_size: 10
+  
+  # API keys
+  api_keys:
+    enabled: false
+    header_name: "X-API-Key"
+
+# Caching Configuration
+cache:
+  enabled: "${CACHE_ENABLED:true}"
+  backend: "${CACHE_BACKEND:memory}"
+  ttl_seconds: 3600
+  max_size_mb: 512
+  
+  redis:
+    url: "${REDIS_URL:redis://localhost:6379/0}"
+    password: "${REDIS_PASSWORD:}"
+    db: 0
+
+# File Storage Configuration
+storage:
+  uploads_dir: "./uploads"
+  temp_dir: "./temp_uploads"
+  max_storage_gb: 10
+  cleanup_old_files: true
+  cleanup_after_days: 30
+  
+  # Cloud storage (optional)
+  cloud:
+    provider: "${CLOUD_STORAGE_PROVIDER:}"
+    aws_s3:
+      bucket: "${AWS_S3_BUCKET:}"
+      region: "${AWS_REGION:us-west-2}"
+      access_key: "${AWS_ACCESS_KEY_ID:}"
+      secret_key: "${AWS_SECRET_ACCESS_KEY:}"
+    
+    gcs:
+      bucket: "${GCS_BUCKET:}"
+      credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS:}"
+
+# Background Tasks Configuration
+tasks:
+  enabled: true
+  max_concurrent: 5
+  retry_delay_seconds: 60
+  max_retries: 3
+  
+  # Celery configuration (optional)
+  celery:
+    broker_url: "${CELERY_BROKER_URL:redis://localhost:6379/1}"
+    result_backend: "${CELERY_RESULT_BACKEND:redis://localhost:6379/2}"
+    task_serializer: "json"
+    accept_content: ["json"]
+    result_serializer: "json"
+
+# Development Configuration
+development:
+  debug: "${DEBUG:false}"
+  reload: "${RELOAD:false}"
+  testing: "${TESTING:false}"
+  
+  # Development tools
+  tools:
+    enable_profiler: false
+    enable_debugger: false
+    hot_reload: true
+
+# Production Configuration  
+production:
+  workers: "${WORKERS:4}"
+  max_requests: 1000
+  max_requests_jitter: 100
+  preload_app: true
+  
+  # SSL/TLS
+  ssl:
+    enabled: "${SSL_ENABLED:false}"
+    cert_file: "${SSL_CERT_FILE:}"
+    key_file: "${SSL_KEY_FILE:}"
+
+# Notification Configuration
+notifications:
+  enabled: "${NOTIFICATIONS_ENABLED:false}"
+  
+  # Email notifications
+  email:
+    smtp_server: "${SMTP_SERVER:}"
+    smtp_port: "${SMTP_PORT:587}"
+    username: "${SMTP_USERNAME:}"
+    password: "${SMTP_PASSWORD:}"
+    from_address: "${FROM_EMAIL:}"
+    use_tls: true
+  
+  # Webhook notifications
+  webhook:
+    url: "${WEBHOOK_URL:}"
+    secret: "${WEBHOOK_SECRET:}"
+    events: ["document_processed", "error_occurred", "human_review_required"]
+  
+  # Slack notifications
+  slack:
+    webhook_url: "${SLACK_WEBHOOK_URL:}"
+    channel: "${SLACK_CHANNEL:#document-processor}"
+    username: "Document Processor Bot"
+
+# Backup Configuration
+backup:
+  enabled: "${BACKUP_ENABLED:false}"
+  schedule_cron: "0 2 * * *"  # Daily at 2 AM
+  retention_days: 30
+  
+  # Backup targets
+  targets:
+    database: true
+    vector_store: true
+    uploads: true
+    config: true
+  
+  # Backup storage
+  storage:
+    local_path: "./backups"
+    cloud_path: "${BACKUP_CLOUD_PATH:}"
+
+# Feature Flags
+features:
+  web_search: "${WEB_SEARCH_ENABLED:false}"
+  ocr_processing: "${OCR_ENABLED:false}"
+  multi_language: "${MULTI_LANGUAGE:false}"
+  advanced_analytics: "${ANALYTICS_ENABLED:false}"
+  user_management: "${USER_MANAGEMENT:false}"
+  audit_logging: "${AUDIT_LOGGING:false}"
+  
+# API Configuration
+api:
+  title: "Document Processor Agent API"
+  description: "AI-powered document processing and Q&A system"
+  version: "1.0.0"
+  prefix: "/api"
+  
+  # OpenAPI/Swagger
+  docs:
+    enabled: true
+    url: "/docs"
+    redoc_url: "/redoc"
+  
+  # API versioning
+  versioning:
+    enabled: false
+    default_version: "v1"
+    header_name: "API-Version"
+
+# Analytics Configuration
+analytics:
+  enabled: "${ANALYTICS_ENABLED:false}"
+  
+  # Usage tracking
+  usage_tracking:
+    track_requests: true
+    track_errors: true
+    track_performance: true
+  
+  # Reporting
+  reporting:
+    daily_reports: true
+    weekly_reports: true
+    monthly_reports: true
+  
+  # Retention
+  retention:
+    raw_data_days: 30
+    aggregated_data_days: 365
+
+# Internationalization
+i18n:
+  enabled: "${I18N_ENABLED:false}"
+  default_language: "en"
+  supported_languages: ["en", "es", "fr", "de", "it", "pt", "zh", "ja"]
+  
+# Custom Extensions
+extensions:
+  enabled: "${EXTENSIONS_ENABLED:false}"
+  plugins_dir: "./plugins"
+  auto_load: true

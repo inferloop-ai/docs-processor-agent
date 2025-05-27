@@ -742,3 +742,629 @@ Return the extracted information as JSON with field names as keys and extracted 
     def get_supported_fields(self) -> List[str]:
         """Get list of supported metadata fields"""
         return list(DocumentMetadata.__fields__.keys())
+
+
+### 
+"""
+Metadata Writer Agent
+Handles database operations and metadata management for documents
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass
+import hashlib
+
+from langchain.schema import Document
+
+from .base_agent import BaseAgent, AgentResult
+
+
+@dataclass
+class DocumentMetadata:
+    """Structured document metadata"""
+    document_id: str
+    filename: str
+    file_size: int
+    file_type: str
+    title: Optional[str] = None
+    author: Optional[str] = None
+    subject: Optional[str] = None
+    language: str = "en"
+    page_count: int = 0
+    word_count: int = 0
+    character_count: int = 0
+    content_hash: Optional[str] = None
+    keywords: Optional[List[str]] = None
+    entities: Optional[List[Dict[str, Any]]] = None
+    summary: Optional[str] = None
+    created_at: Optional[datetime] = None
+    processing_metadata: Optional[Dict[str, Any]] = None
+
+
+class MetadataWriter(BaseAgent):
+    """
+    Metadata Writer Agent
+    
+    Capabilities:
+    - Document metadata extraction and enrichment
+    - Database operations for document storage
+    - Chunk metadata management
+    - Processing result storage
+    - Metadata validation and normalization
+    - Cross-reference and relationship management
+    """
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config)
+        
+        # Load metadata writer specific configuration
+        self.metadata_config = self.config.get('agents', {}).get('metadata_writer', {})
+        
+        # Database configuration
+        self.db_config = self.config.get('database', {})
+        
+        # Processing options
+        self.validate_metadata = self.metadata_config.get('validate_metadata', True)
+        self.enrich_metadata = self.metadata_config.get('enrich_metadata', True)
+        self.store_processing_history = self.metadata_config.get('store_processing_history', True)
+        
+        # Metadata validation rules
+        self.validation_rules = self.metadata_config.get('validation_rules', {})
+        
+        self.log_info("MetadataWriter initialized")
+    
+    async def process(self, input_data: Dict[str, Any], **kwargs) -> AgentResult:
+        """
+        Process metadata writing operations
+        
+        Args:
+            input_data: Dict containing document info and metadata
+            **kwargs: Additional parameters
+        
+        Returns:
+            AgentResult with metadata writing results
+        """
+        try:
+            # Parse input data
+            document_id = input_data.get('document_id')
+            if not document_id:
+                return AgentResult(
+                    success=False,
+                    error="document_id is required"
+                )
+            
+            # Determine operation type
+            operation = input_data.get('operation', 'create')
+            
+            if operation == 'create':
+                return await self._create_document_metadata(input_data)
+            elif operation == 'update':
+                return await self._update_document_metadata(input_data)
+            elif operation == 'enhance':
+                return await self._enhance_document_metadata(input_data)
+            elif operation == 'store_chunks':
+                return await self._store_document_chunks(input_data)
+            elif operation == 'store_processing_result':
+                return await self._store_processing_result(input_data)
+            else:
+                # Default: comprehensive metadata processing
+                return await self._process_comprehensive_metadata(input_data)
+        
+        except Exception as e:
+            self.log_error(f"Error in metadata processing: {str(e)}")
+            return AgentResult(
+                success=False,
+                error=f"Metadata processing failed: {str(e)}"
+            )
+    
+    async def _process_comprehensive_metadata(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Process comprehensive metadata extraction and storage"""
+        
+        document_id = input_data['document_id']
+        documents = input_data.get('documents', [])
+        existing_metadata = input_data.get('existing_metadata', {})
+        
+        try:
+            # Extract metadata from documents
+            extracted_metadata = await self._extract_metadata_from_documents(documents)
+            
+            # Merge with existing metadata
+            combined_metadata = {**existing_metadata, **extracted_metadata}
+            
+            # Validate metadata
+            if self.validate_metadata:
+                validation_result = await self._validate_metadata(combined_metadata)
+                if not validation_result['valid']:
+                    self.log_warning(f"Metadata validation issues: {validation_result['issues']}")
+                    combined_metadata['validation_issues'] = validation_result['issues']
+            
+            # Enrich metadata if enabled
+            if self.enrich_metadata:
+                enriched_metadata = await self._enrich_metadata(combined_metadata, documents)
+                combined_metadata.update(enriched_metadata)
+            
+            # Create structured metadata object
+            structured_metadata = await self._create_structured_metadata(
+                document_id, combined_metadata
+            )
+            
+            # Store in database (if database manager is available)
+            storage_result = await self._store_metadata_in_database(
+                document_id, structured_metadata
+            )
+            
+            result_data = {
+                "document_id": document_id,
+                "metadata": combined_metadata,
+                "structured_metadata": structured_metadata.__dict__,
+                "storage_result": storage_result,
+                "processing_timestamp": datetime.now(timezone.utc).isoformat(),
+                "metadata_stats": {
+                    "total_fields": len(combined_metadata),
+                    "has_title": bool(combined_metadata.get('title')),
+                    "has_author": bool(combined_metadata.get('author')),
+                    "has_keywords": bool(combined_metadata.get('keywords')),
+                    "has_entities": bool(combined_metadata.get('entities')),
+                    "has_summary": bool(combined_metadata.get('summary'))
+                }
+            }
+            
+            return AgentResult(
+                success=True,
+                data=result_data,
+                confidence=0.9,
+                metadata={
+                    "operation": "comprehensive_metadata_processing",
+                    "document_id": document_id,
+                    "documents_processed": len(documents)
+                }
+            )
+            
+        except Exception as e:
+            self.log_error(f"Error in comprehensive metadata processing: {str(e)}")
+            return AgentResult(
+                success=False,
+                error=f"Comprehensive metadata processing failed: {str(e)}"
+            )
+    
+    async def _extract_metadata_from_documents(self, documents: List[Document]) -> Dict[str, Any]:
+        """Extract metadata from document objects"""
+        
+        if not documents:
+            return {}
+        
+        metadata = {
+            "page_count": len(documents),
+            "character_count": 0,
+            "word_count": 0,
+            "sources": [],
+            "content_types": set(),
+            "languages": set()
+        }
+        
+        # Aggregate content statistics
+        all_content = []
+        for doc in documents:
+            content = doc.page_content
+            all_content.append(content)
+            
+            metadata["character_count"] += len(content)
+            metadata["word_count"] += len(content.split())
+            
+            # Extract source information
+            doc_metadata = doc.metadata or {}
+            if doc_metadata.get('source'):
+                metadata["sources"].append(doc_metadata['source'])
+            
+            # Extract content types
+            if doc_metadata.get('file_type'):
+                metadata["content_types"].add(doc_metadata['file_type'])
+            
+            # Extract language information
+            if doc_metadata.get('language'):
+                metadata["languages"].add(doc_metadata['language'])
+        
+        # Convert sets to lists for JSON serialization
+        metadata["sources"] = list(set(metadata["sources"]))
+        metadata["content_types"] = list(metadata["content_types"])
+        metadata["languages"] = list(metadata["languages"])
+        
+        # Set primary language
+        if metadata["languages"]:
+            metadata["language"] = metadata["languages"][0]
+        else:
+            metadata["language"] = "en"  # Default
+        
+        # Calculate content hash
+        combined_content = "\n".join(all_content)
+        metadata["content_hash"] = hashlib.sha256(
+            combined_content.encode('utf-8')
+        ).hexdigest()
+        
+        # Extract title from first document if available
+        if documents and documents[0].metadata.get('title'):
+            metadata["title"] = documents[0].metadata['title']
+        elif documents:
+            # Try to extract title from first few lines
+            first_content = documents[0].page_content
+            lines = first_content.split('\n')
+            for line in lines[:5]:
+                line = line.strip()
+                if len(line) > 5 and len(line) < 100 and not line.endswith('.'):
+                    metadata["title"] = line
+                    break
+        
+        # Extract author information
+        author_sources = []
+        for doc in documents:
+            doc_metadata = doc.metadata or {}
+            if doc_metadata.get('author'):
+                author_sources.append(doc_metadata['author'])
+        
+        if author_sources:
+            # Use most common author
+            from collections import Counter
+            author_counts = Counter(author_sources)
+            metadata["author"] = author_counts.most_common(1)[0][0]
+        
+        return metadata
+    
+    async def _validate_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate metadata according to defined rules"""
+        
+        validation_result = {
+            "valid": True,
+            "issues": []
+        }
+        
+        # Required fields validation
+        required_fields = self.validation_rules.get('required_fields', [])
+        for field in required_fields:
+            if field not in metadata or not metadata[field]:
+                validation_result["issues"].append(f"Missing required field: {field}")
+                validation_result["valid"] = False
+        
+        # Data type validation
+        type_rules = self.validation_rules.get('field_types', {})
+        for field, expected_type in type_rules.items():
+            if field in metadata:
+                value = metadata[field]
+                if expected_type == 'string' and not isinstance(value, str):
+                    validation_result["issues"].append(f"Field {field} should be string, got {type(value)}")
+                elif expected_type == 'integer' and not isinstance(value, int):
+                    validation_result["issues"].append(f"Field {field} should be integer, got {type(value)}")
+                elif expected_type == 'list' and not isinstance(value, list):
+                    validation_result["issues"].append(f"Field {field} should be list, got {type(value)}")
+        
+        # Range validation
+        range_rules = self.validation_rules.get('field_ranges', {})
+        for field, (min_val, max_val) in range_rules.items():
+            if field in metadata:
+                value = metadata[field]
+                if isinstance(value, (int, float)):
+                    if value < min_val or value > max_val:
+                        validation_result["issues"].append(
+                            f"Field {field} value {value} outside range [{min_val}, {max_val}]"
+                        )
+        
+        # Custom validation rules
+        if metadata.get('word_count', 0) < 0:
+            validation_result["issues"].append("Word count cannot be negative")
+            validation_result["valid"] = False
+        
+        if metadata.get('character_count', 0) < 0:
+            validation_result["issues"].append("Character count cannot be negative")
+            validation_result["valid"] = False
+        
+        if metadata.get('page_count', 0) < 1:
+            validation_result["issues"].append("Page count should be at least 1")
+            validation_result["valid"] = False
+        
+        return validation_result
+    
+    async def _enrich_metadata(self, metadata: Dict[str, Any], 
+                             documents: List[Document]) -> Dict[str, Any]:
+        """Enrich metadata with additional computed information"""
+        
+        enriched = {}
+        
+        try:
+            # Calculate readability metrics
+            if metadata.get('word_count') and metadata.get('character_count'):
+                avg_word_length = metadata['character_count'] / metadata['word_count']
+                enriched['average_word_length'] = round(avg_word_length, 2)
+                
+                # Simple readability score (Flesch-like approximation)
+                if metadata['word_count'] > 0:
+                    words_per_sentence = metadata['word_count'] / max(metadata.get('page_count', 1), 1)
+                    readability_score = 206.835 - (1.015 * words_per_sentence) - (84.6 * avg_word_length)
+                    enriched['readability_score'] = max(0, min(100, readability_score))
+            
+            # Document complexity analysis
+            complexity_indicators = 0
+            
+            # Technical terms indicator (words with numbers or special chars)
+            combined_text = " ".join([doc.page_content for doc in documents[:3]])  # Sample
+            technical_words = len([word for word in combined_text.split() 
+                                 if any(c.isdigit() for c in word) or '_' in word])
+            
+            if technical_words > len(combined_text.split()) * 0.1:  # >10% technical terms
+                complexity_indicators += 1
+            
+            # Long sentences indicator
+            sentences = combined_text.split('.')
+            long_sentences = sum(1 for s in sentences if len(s.split()) > 20)
+            if long_sentences > len(sentences) * 0.3:  # >30% long sentences
+                complexity_indicators += 1
+            
+            # Set complexity level
+            if complexity_indicators >= 2:
+                enriched['complexity_level'] = 'high'
+            elif complexity_indicators == 1:
+                enriched['complexity_level'] = 'medium'
+            else:
+                enriched['complexity_level'] = 'low'
+            
+            # Content type classification
+            content_indicators = {
+                'academic': ['abstract', 'methodology', 'conclusion', 'references', 'hypothesis'],
+                'technical': ['implementation', 'algorithm', 'function', 'parameter', 'configuration'],
+                'business': ['revenue', 'market', 'strategy', 'customer', 'profit'],
+                'legal': ['clause', 'agreement', 'liability', 'contract', 'jurisdiction'],
+                'medical': ['patient', 'treatment', 'diagnosis', 'symptoms', 'therapy']
+            }
+            
+            content_lower = combined_text.lower()
+            content_type_scores = {}
+            
+            for content_type, indicators in content_indicators.items():
+                score = sum(1 for indicator in indicators if indicator in content_lower)
+                if score > 0:
+                    content_type_scores[content_type] = score
+            
+            if content_type_scores:
+                primary_type = max(content_type_scores, key=content_type_scores.get)
+                enriched['primary_content_type'] = primary_type
+                enriched['content_type_confidence'] = content_type_scores[primary_type] / len(content_indicators[primary_type])
+            
+            # Processing timestamp
+            enriched['metadata_enriched_at'] = datetime.now(timezone.utc).isoformat()
+            
+            # Enrichment metadata
+            enriched['enrichment_version'] = '1.0.0'
+            enriched['enrichment_methods'] = ['readability_analysis', 'complexity_analysis', 'content_classification']
+            
+        except Exception as e:
+            self.log_warning(f"Error in metadata enrichment: {e}")
+            enriched['enrichment_error'] = str(e)
+        
+        return enriched
+    
+    async def _create_structured_metadata(self, document_id: str, 
+                                        metadata: Dict[str, Any]) -> DocumentMetadata:
+        """Create structured metadata object"""
+        
+        return DocumentMetadata(
+            document_id=document_id,
+            filename=metadata.get('filename', 'unknown'),
+            file_size=metadata.get('file_size', 0),
+            file_type=metadata.get('file_type', 'unknown'),
+            title=metadata.get('title'),
+            author=metadata.get('author'),
+            subject=metadata.get('subject'),
+            language=metadata.get('language', 'en'),
+            page_count=metadata.get('page_count', 0),
+            word_count=metadata.get('word_count', 0),
+            character_count=metadata.get('character_count', 0),
+            content_hash=metadata.get('content_hash'),
+            keywords=metadata.get('keywords'),
+            entities=metadata.get('entities'),
+            summary=metadata.get('summary'),
+            created_at=datetime.now(timezone.utc),
+            processing_metadata=metadata.get('enrichment_metadata', {})
+        )
+    
+    async def _store_metadata_in_database(self, document_id: str, 
+                                        metadata: DocumentMetadata) -> Dict[str, Any]:
+        """Store metadata in database if database manager is available"""
+        
+        try:
+            # This would integrate with the database manager
+            # For now, return a mock result
+            
+            storage_result = {
+                "stored": True,
+                "document_id": document_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "storage_method": "database",
+                "metadata_fields_stored": len(metadata.__dict__)
+            }
+            
+            self.log_info(f"Metadata stored for document {document_id}")
+            return storage_result
+            
+        except Exception as e:
+            self.log_error(f"Error storing metadata in database: {e}")
+            return {
+                "stored": False,
+                "error": str(e),
+                "fallback_used": False
+            }
+    
+    async def _create_document_metadata(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Create new document metadata entry"""
+        
+        document_id = input_data['document_id']
+        metadata = input_data.get('metadata', {})
+        
+        try:
+            # Create structured metadata
+            structured_metadata = await self._create_structured_metadata(document_id, metadata)
+            
+            # Store in database
+            storage_result = await self._store_metadata_in_database(document_id, structured_metadata)
+            
+            return AgentResult(
+                success=True,
+                data={
+                    "operation": "create",
+                    "document_id": document_id,
+                    "metadata": structured_metadata.__dict__,
+                    "storage_result": storage_result
+                },
+                confidence=0.95
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=f"Failed to create document metadata: {str(e)}"
+            )
+    
+    async def _update_document_metadata(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Update existing document metadata"""
+        
+        document_id = input_data['document_id']
+        updates = input_data.get('updates', {})
+        
+        try:
+            # Update logic would go here
+            # For now, return success
+            
+            return AgentResult(
+                success=True,
+                data={
+                    "operation": "update",
+                    "document_id": document_id,
+                    "updated_fields": list(updates.keys()),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                },
+                confidence=0.9
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=f"Failed to update document metadata: {str(e)}"
+            )
+    
+    async def _enhance_document_metadata(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Enhance document metadata with AI-extracted information"""
+        
+        document_id = input_data['document_id']
+        documents = input_data.get('documents', [])
+        
+        try:
+            # AI enhancement would go here
+            # For now, return basic enhancement
+            
+            enhanced_metadata = {
+                "ai_enhanced": True,
+                "enhancement_timestamp": datetime.now(timezone.utc).isoformat(),
+                "enhancement_version": "1.0.0"
+            }
+            
+            return AgentResult(
+                success=True,
+                data={
+                    "operation": "enhance",
+                    "document_id": document_id,
+                    "enhanced_metadata": enhanced_metadata
+                },
+                confidence=0.8
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=f"Failed to enhance document metadata: {str(e)}"
+            )
+    
+    async def _store_document_chunks(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Store document chunk metadata"""
+        
+        document_id = input_data['document_id']
+        chunks = input_data.get('chunks', [])
+        
+        try:
+            chunk_metadata = []
+            
+            for i, chunk in enumerate(chunks):
+                if hasattr(chunk, 'metadata'):
+                    chunk_meta = {
+                        "chunk_id": f"{document_id}_chunk_{i}",
+                        "document_id": document_id,
+                        "chunk_index": i,
+                        "chunk_length": len(chunk.page_content),
+                        "metadata": chunk.metadata
+                    }
+                    chunk_metadata.append(chunk_meta)
+            
+            return AgentResult(
+                success=True,
+                data={
+                    "operation": "store_chunks",
+                    "document_id": document_id,
+                    "chunks_stored": len(chunk_metadata),
+                    "chunk_metadata": chunk_metadata
+                },
+                confidence=0.95
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=f"Failed to store chunk metadata: {str(e)}"
+            )
+    
+    async def _store_processing_result(self, input_data: Dict[str, Any]) -> AgentResult:
+        """Store processing result metadata"""
+        
+        document_id = input_data['document_id']
+        processing_result = input_data.get('processing_result', {})
+        
+        try:
+            result_metadata = {
+                "document_id": document_id,
+                "processing_timestamp": datetime.now(timezone.utc).isoformat(),
+                "result": processing_result,
+                "stored_by": "metadata_writer"
+            }
+            
+            return AgentResult(
+                success=True,
+                data={
+                    "operation": "store_processing_result",
+                    "document_id": document_id,
+                    "result_metadata": result_metadata
+                },
+                confidence=0.9
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=f"Failed to store processing result: {str(e)}"
+            )
+    
+    def set_validation_rules(self, rules: Dict[str, Any]):
+        """Set custom validation rules"""
+        self.validation_rules = rules
+        self.log_info("Custom validation rules set")
+    
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get current validation rules"""
+        return self.validation_rules.copy()
+    
+    async def validate_document_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Public method to validate metadata"""
+        return await self._validate_metadata(metadata)
+    
+    async def enrich_document_metadata(self, metadata: Dict[str, Any], 
+                                     documents: List[Document]) -> Dict[str, Any]:
+        """Public method to enrich metadata"""
+        return await self._enrich_metadata(metadata, documents)

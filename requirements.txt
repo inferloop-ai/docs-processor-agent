@@ -1,1 +1,384 @@
 # Python dependencies will go here
+# Document Processor Agent - Python Dependencies
+# Core Framework Dependencies
+
+# FastAPI and web framework dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+starlette==0.27.0
+
+# Streamlit for web UI
+streamlit==1.28.1
+plotly==5.17.0
+pandas==2.1.3
+
+# LangChain ecosystem - core
+langchain==0.0.345
+langchain-community==0.0.6
+langchain-core==0.1.3
+langgraph==0.0.20
+
+# LangChain - LLM providers
+langchain-openai==0.0.2
+langchain-anthropic==0.0.4
+langchain-google-genai==0.0.5
+
+# LangSmith for monitoring
+langsmith==0.0.66
+
+# Vector databases
+chromadb==0.4.18
+faiss-cpu==1.7.4
+
+# Database (SQL)
+sqlalchemy==2.0.23
+asyncpg==0.29.0  # For PostgreSQL async support
+psycopg2-binary==2.9.9  # For PostgreSQL sync support
+alembic==1.12.1  # Database migrations
+
+# Document processing
+PyPDF2==3.0.1
+PyMuPDF==1.23.8  # More robust PDF processing
+python-docx==1.1.0
+python-pptx==0.6.23
+openpyxl==3.1.2
+xlrd==2.0.1
+beautifulsoup4==4.12.2
+html2text==2020.1.16
+python-magic==0.4.27
+filetype==1.2.0
+
+# OCR capabilities
+pytesseract==0.3.10
+Pillow==10.1.0
+
+# Text processing
+spacy==3.7.2
+nltk==3.8.1
+textstat==0.7.3
+sentence-transformers==2.2.2
+
+# ML and embeddings
+torch==2.1.1
+transformers==4.36.0
+scikit-learn==1.3.2
+numpy==1.25.2
+
+# HTTP requests and web scraping
+requests==2.31.0
+aiohttp==3.9.1
+httpx==0.25.2
+
+# Data processing
+pandas==2.1.3
+numpy==1.25.2
+scipy==1.11.4
+
+# Configuration and environment
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+PyYAML==6.0.1
+
+# Async utilities
+asyncio-throttle==1.0.2
+
+# Monitoring and logging
+prometheus-client==0.19.0
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.1
+pylint==3.0.3
+bandit==1.7.5
+safety==2.3.5
+
+# Performance monitoring
+psutil==5.9.6
+
+# Caching
+redis==5.0.1
+
+# Web scraping (for RAG enrichment)
+duckduckgo-search==3.9.6
+
+# File handling utilities
+pathlib2==2.3.7
+watchdog==3.0.0
+
+# Date and time utilities
+python-dateutil==2.8.2
+pytz==2023.3
+
+# JSON processing
+orjson==3.9.10
+
+# Authentication and security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==41.0.8
+
+# Data validation
+marshmallow==3.20.1
+jsonschema==4.20.0
+
+# Utility libraries
+tqdm==4.66.1
+click==8.1.7
+rich==13.7.0
+typer==0.9.0
+
+# Cloud storage (optional)
+boto3==1.35.0  # AWS
+google-cloud-storage==2.10.0  # Google Cloud
+
+# Image processing (for OCR)
+opencv-python==4.8.1.78
+
+# Audio processing (future feature)
+# librosa==0.10.1
+# soundfile==0.12.1
+
+# Memory optimization
+memory-profiler==0.61.0
+
+# Concurrency
+concurrent-futures==3.1.1
+
+# Networking
+websockets==12.0
+
+# File compression
+zipfile36==0.1.3
+
+# Excel processing
+xlsxwriter==3.1.9
+
+# CSV processing
+csvkit==1.1.1
+
+# Markdown processing
+markdown==3.5.1
+pymdown-extensions==10.4
+
+# Graph databases (future feature)
+# neo4j==5.14.1
+
+# Additional LLM providers
+# cohere==4.37
+# google-generativeai==0.3.2
+
+# Specialized document formats
+# ebooklib==0.18  # EPUB files
+# python-magic-bin==0.4.14  # Windows support
+
+# Development tools
+pre-commit==3.6.0
+jupyter==1.0.0
+ipykernel==6.26.0
+
+# API documentation  
+sphinx==7.2.6
+sphinx-rtd-theme==1.3.0
+
+# Performance profiling
+line-profiler==4.1.1
+py-spy==0.3.14
+
+# Data serialization
+pickle5==0.0.12
+
+# Regular expressions
+regex==2023.10.3
+
+# Fuzzy string matching
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.23.0
+
+# Internationalization
+babel==2.13.1
+
+# Rate limiting
+slowapi==0.1.9
+
+# Background tasks
+celery==5.3.4
+redis==5.0.1
+
+# Workflow orchestration extras
+prefect==2.14.11  # Alternative to custom workflows
+
+# Container orchestration
+docker==6.1.3
+
+# Kubernetes client (for advanced deployments)
+kubernetes==28.1.0
+
+# Monitoring and observability
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+
+# Additional text processing
+textblob==0.17.1
+polyglot==16.7.4
+
+# Search engines
+whoosh==2.7.4
+
+# Specialized embeddings
+instructor==0.4.7
+
+# Advanced OCR
+easyocr==1.7.0
+
+# Document similarity
+gensim==4.3.2
+
+# Statistical analysis
+statsmodels==0.14.0
+
+# Time series (for analytics)
+prophet==1.1.5
+
+# Graph visualization
+networkx==3.2.1
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# Progress bars
+alive-progress==3.1.5
+
+# Configuration management
+hydra-core==1.3.2
+omegaconf==2.3.0
+
+# Memory management
+pympler==0.9
+
+# Async database
+databases[postgresql]==0.8.0
+asyncio-mqtt==0.16.1
+
+# File watching
+inotify==0.2.10
+
+# Advanced logging
+structlog==23.2.0
+colorama==0.4.6
+
+# Security scanning
+semgrep==1.45.0
+
+# Type hints
+typing-extensions==4.8.0
+
+# Python version compatibility
+six==1.16.0
+
+# Base utilities that are often required
+certifi==2023.11.17
+charset-normalizer==3.3.2
+idna==3.6
+urllib3==2.1.0
+
+# JSON Web Tokens
+PyJWT==2.8.0
+
+# Environment management
+python-decouple==3.8
+
+# Caching decorators
+cachetools==5.3.2
+
+# HTTP status codes
+http-status==0.0.2
+
+# UUID utilities
+shortuuid==1.0.11
+
+# File operations
+pathspec==0.11.2
+
+# Data classes
+dataclasses-json==0.6.3
+
+# Async context managers
+async-timeout==4.0.3
+
+# Better traceback
+traceback2==1.4.0
+
+# Memory-mapped files
+mmap==1.0.0
+
+# OS utilities
+distro==1.8.0
+
+# Package information
+importlib-metadata==6.8.0
+
+# Backports for older Python versions
+importlib-resources==6.1.1
+
+# Error handling improvements
+more-itertools==10.1.0
+
+# Functional programming utilities
+toolz==0.12.0
+
+# Better JSON handling
+ujson==5.8.0
+
+# Async iterators
+aiofiles==23.2.1
+aiocsv==1.3.1
+
+# Protocol buffers (for advanced serialization)
+protobuf==4.25.1
+
+# XML processing
+lxml==4.9.3
+
+# Archive handling
+rarfile==4.1
+py7zr==0.20.8
+
+# Hashing utilities
+xxhash==3.4.1
+
+# Better subprocess handling
+subprocess32==3.5.4
+
+# Process management
+psutil==5.9.6
+
+# System information
+platform==1.0.8
+
+# Better path handling
+pathlib==1.0.1
+
+# Timezone handling
+tzdata==2023.3
+
+# Better random number generation
+secrets==3.3.2
+
+# File locking
+filelock==3.13.1
+
+# Atomic file operations
+atomicwrites==1.4.1
+
+# Cross-platform utilities
+plyer==2.1.0
+
+# Better terminal output
+colorama==0.4.6
+termcolor==2.4.0
