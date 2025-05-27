@@ -1,414 +1,571 @@
-# Document Processor Agent - CI/CD Pipeline
-# Handles testing, building, and deployment
+"""
+Database Connection Manager
+Handles database connections, sessions, and common operations
+"""
 
-name: CI/CD Pipeline
+import asyncio
+import logging
+from contextlib import asynccontextmanager, contextmanager
+from typing import Dict, List, Optional, Any, AsyncGenerator, Generator
+import os
+from datetime import datetime, timezone
+import uuid
 
-on:
-  push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main, develop ]
-  schedule:
-    # Run tests daily at 2 AM UTC
-    - cron: '0 2 * * *'
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import StaticPool
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
-env:
-  PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
+from .models import (
+    Base, Document, DocumentChunk, ProcessingResult, 
+    QueryResult, ValidationResult, SystemMetrics, UserSession
+)
 
-jobs:
-  # Code Quality and Linting
-  lint:
-    name: Code Quality
-    runs-on: ubuntu-latest
+logger = logging.getLogger(__name__)
+
+
+class DatabaseManager:
+    """
+    Database connection and session manager
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install black flake8 mypy pylint bandit safety
-        pip install -r requirements.txt
-        
-    - name: Run Black formatter check
-      run: black --check --diff .
-      
-    - name: Run Flake8 linting
-      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-      
-    - name: Run MyPy type checking
-      run: mypy agents/ langgraph_flows/ --ignore-missing-imports
-      
-    - name: Run Pylint
-      run: pylint agents/ langgraph_flows/ --disable=missing-docstring,too-few-public-methods
-      
-    - name: Run Bandit security check
-      run: bandit -r agents/ langgraph_flows/ -f json -o bandit-report.json
-      
-    - name: Run Safety check
-      run: safety check --json --output safety-report.json
-      continue-on-error: true
-      
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
-          safety-report.json
-
-  # Unit and Integration Tests
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    needs: lint
+    Supports both synchronous and asynchronous operations
+    Handles connection pooling, session management, and common database operations
+    """
     
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12']
-        database: ['sqlite', 'postgresql']
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
         
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_document_processor
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-          
-      redis:
-        image: redis:7
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+        # Database configuration
+        self.database_url = self.config.get('url', os.getenv('DATABASE_URL', 'sqlite:///./documents.db'))
+        self.pool_size = self.config.get('pool_size', 10)
+        self.max_overflow = self.config.get('max_overflow', 20)
+        self.pool_timeout = self.config.get('pool_timeout', 30)
+        self.pool_recycle = self.config.get('pool_recycle', 3600)
+        self.echo = self.config.get('echo', False)
+        
+        # Engine and session makers
+        self.engine: Optional[Engine] = None
+        self.async_engine = None
+        self.SessionLocal = None
+        self.AsyncSessionLocal = None
+        
+        # Connection status
+        self.is_initialized = False
+        self.is_connected = False
+        
+        logger.info(f"DatabaseManager initialized with URL: {self._mask_database_url()}")
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
+    def _mask_database_url(self) -> str:
+        """Mask sensitive parts of database URL for logging"""
+        if '://' not in self.database_url:
+            return self.database_url
         
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-${{ matrix.python-version }}-pip-${{ hashFiles('**/requirements.txt') }}
-        
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libmagic1 \
-          poppler-utils \
-          tesseract-ocr \
-          build-essential
-          
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-asyncio pytest-mock
-        
-    - name: Create test directories
-      run: |
-        mkdir -p logs uploads temp_uploads data
-        
-    - name: Set up test environment
-      run: |
-        cp .env.example .env
-        echo "TESTING=true" >> .env
-        echo "DATABASE_URL=sqlite:///./test.db" >> .env
-        
-    - name: Set up PostgreSQL test environment
-      if: matrix.database == 'postgresql'
-      run: |
-        echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_document_processor" >> .env
-        
-    - name: Run unit tests
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      run: |
-        pytest tests/test_agents.py -v --cov=agents --cov-report=xml --cov-report=html
-        
-    - name: Run integration tests
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      run: |
-        pytest tests/test_integration.py -v --cov-append --cov=. --cov-report=xml --cov-report=html
-        
-    - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        
-    - name: Archive test results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: test-results-${{ matrix.python-version }}-${{ matrix.database }}
-        path: |
-          htmlcov/
-          .coverage
-          pytest-report.xml
-
-  # Docker Build and Test
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: test
+        protocol, rest = self.database_url.split('://', 1)
+        if '@' in rest:
+            credentials, host_db = rest.split('@', 1)
+            return f"{protocol}://***:***@{host_db}"
+        return self.database_url
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: false
-        tags: |
-          document-processor:latest
-          document-processor:${{ github.sha }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        
-    - name: Test Docker image
-      run: |
-        docker run --rm -d --name test-container \
-          -p 8000:8000 \
-          -e TESTING=true \
-          document-processor:latest
-        
-        # Wait for container to start
-        sleep 10
-        
-        # Test health endpoint
-        curl -f http://localhost:8000/health || exit 1
-        
-        # Stop container
-        docker stop test-container
-        
-    - name: Docker security scan
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: document-processor:latest
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        
-    - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
-
-  # Performance Tests
-  performance:
-    name: Performance Tests
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main'
+    async def initialize(self):
+        """Initialize database connections and create tables"""
+        try:
+            # Create synchronous engine
+            if self.database_url.startswith('sqlite'):
+                # SQLite-specific configuration
+                self.engine = create_engine(
+                    self.database_url,
+                    echo=self.echo,
+                    poolclass=StaticPool,
+                    connect_args={"check_same_thread": False}
+                )
+            else:
+                # PostgreSQL and other databases
+                self.engine = create_engine(
+                    self.database_url,
+                    echo=self.echo,
+                    pool_size=self.pool_size,
+                    max_overflow=self.max_overflow,
+                    pool_timeout=self.pool_timeout,
+                    pool_recycle=self.pool_recycle
+                )
+            
+            # Create async engine
+            async_url = self._convert_to_async_url(self.database_url)
+            if async_url:
+                if self.database_url.startswith('sqlite'):
+                    self.async_engine = create_async_engine(
+                        async_url,
+                        echo=self.echo,
+                        poolclass=StaticPool,
+                        connect_args={"check_same_thread": False}
+                    )
+                else:
+                    self.async_engine = create_async_engine(
+                        async_url,
+                        echo=self.echo,
+                        pool_size=self.pool_size,
+                        max_overflow=self.max_overflow,
+                        pool_timeout=self.pool_timeout,
+                        pool_recycle=self.pool_recycle
+                    )
+            
+            # Create session makers
+            self.SessionLocal = sessionmaker(bind=self.engine)
+            if self.async_engine:
+                self.AsyncSessionLocal = async_sessionmaker(bind=self.async_engine)
+            
+            # Test connection
+            await self.test_connection()
+            
+            # Create tables
+            await self.create_tables()
+            
+            self.is_initialized = True
+            self.is_connected = True
+            
+            logger.info("Database initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {str(e)}")
+            raise
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        pip install locust pytest-benchmark
-        
-    - name: Run performance tests
-      run: |
-        python -m pytest tests/test_performance.py --benchmark-only --benchmark-json=benchmark.json
-        
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v3
-      with:
-        name: benchmark-results
-        path: benchmark.json
-
-  # Security Scanning
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: lint
+    def _convert_to_async_url(self, sync_url: str) -> Optional[str]:
+        """Convert synchronous database URL to asynchronous version"""
+        if sync_url.startswith('sqlite:'):
+            return sync_url.replace('sqlite:', 'sqlite+aiosqlite:', 1)
+        elif sync_url.startswith('postgresql:'):
+            return sync_url.replace('postgresql:', 'postgresql+asyncpg:', 1)
+        elif sync_url.startswith('mysql:'):
+            return sync_url.replace('mysql:', 'mysql+aiomysql:', 1)
+        else:
+            logger.warning(f"Unknown database type for async conversion: {sync_url}")
+            return None
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run CodeQL Analysis
-      uses: github/codeql-action/init@v2
-      with:
-        languages: python
-        
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v2
-      
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
-
-  # Deploy to Development
-  deploy-dev:
-    name: Deploy to Development
-    runs-on: ubuntu-latest
-    needs: [test, docker]
-    if: github.ref == 'refs/heads/develop'
-    environment: development
+    async def test_connection(self):
+        """Test database connection"""
+        try:
+            with self.get_session() as session:
+                session.execute(text("SELECT 1"))
+            logger.info("Database connection test successful")
+        except Exception as e:
+            logger.error(f"Database connection test failed: {str(e)}")
+            raise
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-west-2
-        
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-      
-    - name: Build and push Docker image
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: document-processor
-        IMAGE_TAG: dev-${{ github.sha }}
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:dev-latest
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:dev-latest
-        
-    - name: Deploy to ECS
-      run: |
-        aws ecs update-service \
-          --cluster document-processor-dev-cluster \
-          --service document-processor-dev-service \
-          --force-new-deployment
-
-  # Deploy to Production
-  deploy-prod:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: [test, docker, performance, security]
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: production
+    async def create_tables(self):
+        """Create all database tables"""
+        try:
+            Base.metadata.create_all(self.engine)
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create tables: {str(e)}")
+            raise
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
-        aws-region: us-west-2
-        
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-      
-    - name: Get version from tag
-      id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      
-    - name: Build and push Docker image
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: document-processor  
-        IMAGE_TAG: ${{ steps.get_version.outputs.VERSION }}
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        
-    - name: Deploy to ECS
-      env:
-        VERSION: ${{ steps.get_version.outputs.VERSION }}
-      run: |
-        aws ecs update-service \
-          --cluster document-processor-prod-cluster \
-          --service document-processor-prod-service \
-          --force-new-deployment
-          
-    - name: Create GitHub Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: false
-
-  # Notify on completion
-  notify:
-    name: Notify
-    runs-on: ubuntu-latest
-    needs: [deploy-dev, deploy-prod]
-    if: always()
+    async def drop_tables(self):
+        """Drop all database tables (use with caution!)"""
+        try:
+            Base.metadata.drop_all(self.engine)
+            logger.warning("All database tables dropped")
+        except Exception as e:
+            logger.error(f"Failed to drop tables: {str(e)}")
+            raise
     
-    steps:
-    - name: Notify Slack on success
-      if: success()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: success
-        text: '🎉 Document Processor deployment successful!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    @contextmanager
+    def get_session(self) -> Generator[Session, None, None]:
+        """Get a synchronous database session"""
+        if not self.SessionLocal:
+            raise RuntimeError("Database not initialized. Call initialize() first.")
         
-    - name: Notify Slack on failure  
-      if: failure()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: failure
-        text: '❌ Document Processor deployment failed!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    
+    @asynccontextmanager
+    async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Get an asynchronous database session"""
+        if not self.AsyncSessionLocal:
+            raise RuntimeError("Async database not initialized. Call initialize() first.")
+        
+        session = self.AsyncSessionLocal()
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+    
+    # Document operations
+    async def create_document(self, document_data: Dict[str, Any]) -> Document:
+        """Create a new document record"""
+        try:
+            with self.get_session() as session:
+                # Check for duplicate content hash
+                if document_data.get('content_hash'):
+                    existing = session.query(Document).filter_by(
+                        content_hash=document_data['content_hash']
+                    ).first()
+                    if existing:
+                        logger.warning(f"Document with hash {document_data['content_hash']} already exists")
+                        return existing
+                
+                document = Document(**document_data)
+                session.add(document)
+                session.flush()  # Get the ID
+                
+                logger.info(f"Created document: {document.id}")
+                return document
+                
+        except IntegrityError as e:
+            logger.error(f"Integrity error creating document: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Error creating document: {str(e)}")
+            raise
+    
+    async def get_document(self, document_id: str) -> Optional[Document]:
+        """Get a document by ID"""
+        try:
+            with self.get_session() as session:
+                document = session.query(Document).filter_by(id=document_id).first()
+                return document
+        except Exception as e:
+            logger.error(f"Error getting document {document_id}: {str(e)}")
+            return None
+    
+    async def get_documents(self, limit: int = 20, offset: int = 0, 
+                          status: Optional[str] = None) -> List[Document]:
+        """Get multiple documents with pagination"""
+        try:
+            with self.get_session() as session:
+                query = session.query(Document)
+                
+                if status:
+                    query = query.filter_by(status=status)
+                
+                documents = query.order_by(Document.created_at.desc())\
+                              .offset(offset)\
+                              .limit(limit)\
+                              .all()
+                
+                return documents
+        except Exception as e:
+            logger.error(f"Error getting documents: {str(e)}")
+            return []
+    
+    async def get_document_count(self, status: Optional[str] = None) -> int:
+        """Get total count of documents"""
+        try:
+            with self.get_session() as session:
+                query = session.query(Document)
+                
+                if status:
+                    query = query.filter_by(status=status)
+                
+                return query.count()
+        except Exception as e:
+            logger.error(f"Error getting document count: {str(e)}")
+            return 0
+    
+    async def update_document(self, document_id: str, updates: Dict[str, Any]) -> bool:
+        """Update a document record"""
+        try:
+            with self.get_session() as session:
+                document = session.query(Document).filter_by(id=document_id).first()
+                
+                if not document:
+                    return False
+                
+                for key, value in updates.items():
+                    if hasattr(document, key):
+                        setattr(document, key, value)
+                
+                document.updated_at = datetime.now(timezone.utc)
+                
+                logger.info(f"Updated document: {document_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error updating document {document_id}: {str(e)}")
+            return False
+    
+    async def delete_document(self, document_id: str) -> bool:
+        """Delete a document and all related records"""
+        try:
+            with self.get_session() as session:
+                document = session.query(Document).filter_by(id=document_id).first()
+                
+                if not document:
+                    return False
+                
+                session.delete(document)
+                
+                logger.info(f"Deleted document: {document_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error deleting document {document_id}: {str(e)}")
+            return False
+    
+    # Document chunk operations
+    async def create_document_chunks(self, chunks_data: List[Dict[str, Any]]) -> List[DocumentChunk]:
+        """Create multiple document chunks"""
+        try:
+            with self.get_session() as session:
+                chunks = []
+                for chunk_data in chunks_data:
+                    chunk = DocumentChunk(**chunk_data)
+                    session.add(chunk)
+                    chunks.append(chunk)
+                
+                session.flush()  # Get the IDs
+                
+                logger.info(f"Created {len(chunks)} document chunks")
+                return chunks
+                
+        except Exception as e:
+            logger.error(f"Error creating document chunks: {str(e)}")
+            raise
+    
+    async def get_document_chunks(self, document_id: str) -> List[DocumentChunk]:
+        """Get all chunks for a document"""
+        try:
+            with self.get_session() as session:
+                chunks = session.query(DocumentChunk)\
+                               .filter_by(document_id=document_id)\
+                               .order_by(DocumentChunk.chunk_index)\
+                               .all()
+                return chunks
+        except Exception as e:
+            logger.error(f"Error getting chunks for document {document_id}: {str(e)}")
+            return []
+    
+    # Processing result operations
+    async def create_processing_result(self, result_data: Dict[str, Any]) -> ProcessingResult:
+        """Create a processing result record"""
+        try:
+            with self.get_session() as session:
+                result = ProcessingResult(**result_data)
+                session.add(result)
+                session.flush()
+                
+                logger.info(f"Created processing result: {result.id}")
+                return result
+                
+        except Exception as e:
+            logger.error(f"Error creating processing result: {str(e)}")
+            raise
+    
+    async def get_processing_results(self, document_id: str, 
+                                   agent_name: Optional[str] = None) -> List[ProcessingResult]:
+        """Get processing results for a document"""
+        try:
+            with self.get_session() as session:
+                query = session.query(ProcessingResult).filter_by(document_id=document_id)
+                
+                if agent_name:
+                    query = query.filter_by(agent_name=agent_name)
+                
+                results = query.order_by(ProcessingResult.created_at.desc()).all()
+                return results
+        except Exception as e:
+            logger.error(f"Error getting processing results: {str(e)}")
+            return []
+    
+    # Query result operations
+    async def create_query_result(self, query_data: Dict[str, Any]) -> QueryResult:
+        """Create a query result record"""
+        try:
+            with self.get_session() as session:
+                query_result = QueryResult(**query_data)
+                session.add(query_result)
+                session.flush()
+                
+                logger.info(f"Created query result: {query_result.id}")
+                return query_result
+                
+        except Exception as e:
+            logger.error(f"Error creating query result: {str(e)}")
+            raise
+    
+    async def get_query_results(self, session_id: Optional[str] = None,
+                               user_id: Optional[str] = None,
+                               limit: int = 50) -> List[QueryResult]:
+        """Get query results with optional filtering"""
+        try:
+            with self.get_session() as session:
+                query = session.query(QueryResult)
+                
+                if session_id:
+                    query = query.filter_by(session_id=session_id)
+                
+                if user_id:
+                    query = query.filter_by(user_id=user_id)
+                
+                results = query.order_by(QueryResult.created_at.desc())\
+                              .limit(limit)\
+                              .all()
+                return results
+        except Exception as e:
+            logger.error(f"Error getting query results: {str(e)}")
+            return []
+    
+    # System metrics operations
+    async def record_metric(self, metric_name: str, value: float, 
+                          category: str = "performance", 
+                          unit: Optional[str] = None,
+                          context_data: Optional[Dict] = None):
+        """Record a system metric"""
+        try:
+            with self.get_session() as session:
+                metric = SystemMetrics(
+                    metric_name=metric_name,
+                    metric_category=category,
+                    metric_value=value,
+                    metric_unit=unit,
+                    context_data=context_data
+                )
+                session.add(metric)
+                
+                logger.debug(f"Recorded metric: {metric_name} = {value} {unit or ''}")
+                
+        except Exception as e:
+            logger.error(f"Error recording metric: {str(e)}")
+    
+    async def get_metrics(self, metric_name: Optional[str] = None,
+                         category: Optional[str] = None,
+                         limit: int = 100) -> List[SystemMetrics]:
+        """Get system metrics"""
+        try:
+            with self.get_session() as session:
+                query = session.query(SystemMetrics)
+                
+                if metric_name:
+                    query = query.filter_by(metric_name=metric_name)
+                
+                if category:
+                    query = query.filter_by(metric_category=category)
+                
+                metrics = query.order_by(SystemMetrics.created_at.desc())\
+                              .limit(limit)\
+                              .all()
+                return metrics
+        except Exception as e:
+            logger.error(f"Error getting metrics: {str(e)}")
+            return []
+    
+    # Session management
+    async def create_user_session(self, session_id: str, user_id: Optional[str] = None,
+                                 user_agent: Optional[str] = None,
+                                 ip_address: Optional[str] = None) -> UserSession:
+        """Create a user session record"""
+        try:
+            with self.get_session() as session:
+                user_session = UserSession(
+                    session_id=session_id,
+                    user_id=user_id,
+                    user_agent=user_agent,
+                    ip_address=ip_address
+                )
+                session.add(user_session)
+                session.flush()
+                
+                logger.info(f"Created user session: {session_id}")
+                return user_session
+                
+        except Exception as e:
+            logger.error(f"Error creating user session: {str(e)}")
+            raise
+    
+    async def update_session_activity(self, session_id: str):
+        """Update session last activity timestamp"""
+        try:
+            with self.get_session() as session:
+                user_session = session.query(UserSession).filter_by(session_id=session_id).first()
+                
+                if user_session:
+                    user_session.last_activity_at = datetime.now(timezone.utc)
+                    
+        except Exception as e:
+            logger.error(f"Error updating session activity: {str(e)}")
+    
+    # Utility methods
+    async def get_database_stats(self) -> Dict[str, Any]:
+        """Get database statistics"""
+        try:
+            with self.get_session() as session:
+                stats = {
+                    'total_documents': session.query(Document).count(),
+                    'processing_documents': session.query(Document).filter_by(status='processing').count(),
+                    'completed_documents': session.query(Document).filter_by(status='completed').count(),
+                    'failed_documents': session.query(Document).filter_by(status='failed').count(),
+                    'total_chunks': session.query(DocumentChunk).count(),
+                    'total_queries': session.query(QueryResult).count(),
+                    'total_sessions': session.query(UserSession).count()
+                }
+                
+                return stats
+        except Exception as e:
+            logger.error(f"Error getting database stats: {str(e)}")
+            return {}
+    
+    async def cleanup_old_records(self, days: int = 30):
+        """Clean up old records to maintain database size"""
+        try:
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            
+            with self.get_session() as session:
+                # Clean up old metrics
+                old_metrics = session.query(SystemMetrics)\
+                                   .filter(SystemMetrics.created_at < cutoff_date)\
+                                   .count()
+                
+                session.query(SystemMetrics)\
+                       .filter(SystemMetrics.created_at < cutoff_date)\
+                       .delete()
+                
+                # Clean up old sessions
+                old_sessions = session.query(UserSession)\
+                                    .filter(UserSession.ended_at < cutoff_date)\
+                                    .count()
+                
+                session.query(UserSession)\
+                       .filter(UserSession.ended_at < cutoff_date)\
+                       .delete()
+                
+                logger.info(f"Cleaned up {old_metrics} old metrics and {old_sessions} old sessions")
+                
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
+    
+    async def close(self):
+        """Close database connections"""
+        try:
+            if self.engine:
+                self.engine.dispose()
+            
+            if self.async_engine:
+                await self.async_engine.dispose()
+            
+            self.is_connected = False
+            logger.info("Database connections closed")
+            
+        except Exception as e:
+            logger.error(f"Error closing database connections: {str(e)}")
+    
+    def __del__(self):
+        """Cleanup on object destruction"""
+        if self.is_connected:
+            try:
+                if self.engine:
+                    self.engine.dispose()
+            except:
+                pass
